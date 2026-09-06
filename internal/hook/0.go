@@ -16,4 +16,9 @@ type Hook interface {
 	Execute(rc *app.RequestContext) error
 }
 
+type Registry interface {
+	Register(name string, factory HookFactory) error
+	Build(name string, config map[string]any) (Hook, error)
+}
+
 type HookFactory func(config map[string]any) (Hook, error)
