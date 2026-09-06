@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  enable:
+    - forbidigo
+    - gocritic
+    - bodyclose
+    - exhaustive
+    - goconst
+    - gocognit
+    - gochecknoinits
+    - nlreturn
+    - lll
+    - mnd
+    - forcetypeassert
+    - tagliatelle
+    - dupl
+    - nonamedreturns
+    - gochecknoglobals
+    - paralleltest
+    - cyclop
+    - nakedret
+    - recvcheck
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - gocyclo
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+run:
+  timeout: 5m
+  issues-exit-code: 1
