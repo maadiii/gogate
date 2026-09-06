@@ -22,19 +22,6 @@ func (r Route) validate(svcName string, idx int) error {
 		return fmt.Errorf("services.%s.routes[%d].method: must have at least one method", svcName, idx)
 	}
 
-	seenRoutes := make(map[string]bool) // key: "METHOD path"
-
-	for _, method := range r.Methods {
-		key := method + " " + r.Path
-		if seenRoutes[key] {
-			return fmt.Errorf(
-				"services.%s.routes[%d]: duplicate route %s %s",
-				svcName, idx, method, r.Path,
-			)
-		}
-		seenRoutes[key] = true
-	}
-
 	if err := r.Hooks.PreRequest.validate(svcName, idx, "pre_request"); err != nil {
 		return err
 	}
