@@ -4,6 +4,8 @@ github.com/bytedance/gopkg/internal/runtimex
 github.com/bytedance/gopkg/lang/dirtmake
 github.com/bytedance/gopkg/lang/fastrand
 github.com/bytedance/gopkg/lang/mcache
+github.com/bytedance/gopkg/util/gopool
+github.com/bytedance/gopkg/util/logger
 # github.com/bytedance/sonic v1.15.0
 ## explicit; go 1.18
 github.com/bytedance/sonic
@@ -53,15 +55,24 @@ github.com/cloudwego/base64x/internal/native
 github.com/cloudwego/base64x/internal/native/avx2
 github.com/cloudwego/base64x/internal/native/sse
 github.com/cloudwego/base64x/internal/rt
+# github.com/cloudwego/gopkg v0.2.0
+## explicit; go 1.20
+github.com/cloudwego/gopkg/bufiox
+github.com/cloudwego/gopkg/concurrency/gopool
+github.com/cloudwego/gopkg/net/connstate
 # github.com/cloudwego/hertz v0.10.6
 ## explicit; go 1.20
 github.com/cloudwego/hertz/internal/bytesconv
 github.com/cloudwego/hertz/internal/bytestr
 github.com/cloudwego/hertz/internal/nocopy
+github.com/cloudwego/hertz/internal/stats
 github.com/cloudwego/hertz/internal/tagexpr
 github.com/cloudwego/hertz/internal/tagexpr/validator
 github.com/cloudwego/hertz/pkg/app
+github.com/cloudwego/hertz/pkg/app/client
 github.com/cloudwego/hertz/pkg/app/client/retry
+github.com/cloudwego/hertz/pkg/app/middlewares/server/recovery
+github.com/cloudwego/hertz/pkg/app/server
 github.com/cloudwego/hertz/pkg/app/server/binding
 github.com/cloudwego/hertz/pkg/app/server/binding/internal/decoder
 github.com/cloudwego/hertz/pkg/app/server/registry
@@ -73,20 +84,50 @@ github.com/cloudwego/hertz/pkg/common/errors
 github.com/cloudwego/hertz/pkg/common/hlog
 github.com/cloudwego/hertz/pkg/common/json
 github.com/cloudwego/hertz/pkg/common/stackless
+github.com/cloudwego/hertz/pkg/common/timer
+github.com/cloudwego/hertz/pkg/common/tracer
 github.com/cloudwego/hertz/pkg/common/tracer/stats
 github.com/cloudwego/hertz/pkg/common/tracer/traceinfo
 github.com/cloudwego/hertz/pkg/common/utils
 github.com/cloudwego/hertz/pkg/network
+github.com/cloudwego/hertz/pkg/network/dialer
+github.com/cloudwego/hertz/pkg/network/netpoll
+github.com/cloudwego/hertz/pkg/network/standard
 github.com/cloudwego/hertz/pkg/protocol
+github.com/cloudwego/hertz/pkg/protocol/client
 github.com/cloudwego/hertz/pkg/protocol/consts
+github.com/cloudwego/hertz/pkg/protocol/http1
+github.com/cloudwego/hertz/pkg/protocol/http1/ext
+github.com/cloudwego/hertz/pkg/protocol/http1/factory
+github.com/cloudwego/hertz/pkg/protocol/http1/proxy
+github.com/cloudwego/hertz/pkg/protocol/http1/req
+github.com/cloudwego/hertz/pkg/protocol/http1/resp
+github.com/cloudwego/hertz/pkg/protocol/suite
+github.com/cloudwego/hertz/pkg/route
 github.com/cloudwego/hertz/pkg/route/consts
 github.com/cloudwego/hertz/pkg/route/param
+# github.com/cloudwego/netpoll v0.7.5
+## explicit; go 1.20
+github.com/cloudwego/netpoll
+github.com/cloudwego/netpoll/internal/runner
 # github.com/fsnotify/fsnotify v1.5.4
 ## explicit; go 1.16
 github.com/fsnotify/fsnotify
+# github.com/gorilla/websocket v1.5.1
+## explicit; go 1.20
+github.com/gorilla/websocket
+# github.com/hertz-contrib/reverseproxy v1.0.6
+## explicit; go 1.16
+github.com/hertz-contrib/reverseproxy
+# github.com/hertz-contrib/websocket v0.0.1
+## explicit; go 1.16
+github.com/hertz-contrib/websocket
 # github.com/klauspost/cpuid/v2 v2.2.9
 ## explicit; go 1.20
 github.com/klauspost/cpuid/v2
+# github.com/savsgio/gotils v0.0.0-20220530130905-52f3993e8d6d
+## explicit; go 1.13
+github.com/savsgio/gotils/strconv
 # github.com/tidwall/gjson v1.14.4
 ## explicit; go 1.12
 github.com/tidwall/gjson
@@ -118,6 +159,10 @@ github.com/twitchyliquid64/golang-asm/unsafeheader
 # golang.org/x/arch v0.0.0-20210923205945-b76863e36670
 ## explicit; go 1.17
 golang.org/x/arch/x86/x86asm
+# golang.org/x/net v0.17.0
+## explicit; go 1.17
+golang.org/x/net/internal/socks
+golang.org/x/net/proxy
 # golang.org/x/sys v0.30.0
 ## explicit; go 1.18
 golang.org/x/sys/unix

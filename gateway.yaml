@@ -1,0 +1,9 @@
+port: 8000
+services:
+  users:
+    target: "localhost:3000"
+    routes:
+      - path: /api/v1/auth/me
+        methods: [GET]
+      - path: /api/v1/users/*
+        methods: [GET, POST]
