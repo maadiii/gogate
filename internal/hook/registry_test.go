@@ -1,6 +1,7 @@
 package hook_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -12,9 +13,9 @@ type fakeHook struct {
 	stage hook.Stage
 }
 
-func (fh *fakeHook) Name() string                         { return fh.name }
-func (fh *fakeHook) Stage() hook.Stage                    { return fh.stage }
-func (fh *fakeHook) Execute(rc *app.RequestContext) error { return nil }
+func (fh *fakeHook) Name() string                                            { return fh.name }
+func (fh *fakeHook) Stage() hook.Stage                                       { return fh.stage }
+func (fh *fakeHook) Execute(c context.Context, rc *app.RequestContext) error { return nil }
 
 func TestRegistry(t *testing.T) {
 	t.Parallel()

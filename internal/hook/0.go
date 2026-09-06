@@ -1,6 +1,10 @@
 package hook
 
-import "github.com/cloudwego/hertz/pkg/app"
+import (
+	"context"
+
+	"github.com/cloudwego/hertz/pkg/app"
+)
 
 type Stage string
 
@@ -13,7 +17,7 @@ const (
 type Hook interface {
 	Name() string
 	Stage() Stage
-	Execute(rc *app.RequestContext) error
+	Execute(c context.Context, rc *app.RequestContext) error
 }
 
 type Registry interface {

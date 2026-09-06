@@ -88,6 +88,7 @@ github.com/cloudwego/hertz/pkg/common/timer
 github.com/cloudwego/hertz/pkg/common/tracer
 github.com/cloudwego/hertz/pkg/common/tracer/stats
 github.com/cloudwego/hertz/pkg/common/tracer/traceinfo
+github.com/cloudwego/hertz/pkg/common/ut
 github.com/cloudwego/hertz/pkg/common/utils
 github.com/cloudwego/hertz/pkg/network
 github.com/cloudwego/hertz/pkg/network/dialer
