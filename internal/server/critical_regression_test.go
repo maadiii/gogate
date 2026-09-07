@@ -16,6 +16,18 @@ import (
 	"github.com/maadiii/gogate/internal/hook"
 )
 
+// TestGetOrCreateProxy_ConcurrentFirstAccess_DoesNotDeadlock is a direct
+// regression test for the RWMutex deadlock bug found in this review: the
+// original code called RLock() with a deferred RUnlock(), then tried to
+// call Lock() for the same mutex before that RUnlock() ran. Go's
+// RWMutex cannot upgrade a read lock to a write lock, so this would
+// deadlock forever the very first time multiple goroutines raced to
+// build the proxy for a target that wasn't cached yet.
+//
+// This test fires many goroutines at a brand-new (never-cached) target
+// simultaneously and requires the whole thing to finish within a short
+// timeout. If the deadlock regresses, this test fails loudly instead of
+// hanging the test suite forever.
 func TestGetOrCreateProxy_ConcurrentFirstAccess_DoesNotDeadlock(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +66,17 @@ func TestGetOrCreateProxy_ConcurrentFirstAccess_DoesNotDeadlock(t *testing.T) {
 	}
 }
 
+// TestForward_HookPanic_IsRecoveredAsError is a direct regression test
+// for the missing panic-recovery bug found in this review: without
+// recover() inside runStage, and since the gateway uses server.New()
+// (not server.Default(), which is the only variant with a built-in
+// recovery middleware), an unhandled panic in any single Hook would
+// crash the entire process — not just the one request — because an
+// unrecovered panic in any goroutine terminates the whole Go program.
+//
+// This test deliberately panics inside a PreRequest hook. If recovery
+// is missing, this test process itself would crash (not just fail);
+// its passing at all is direct proof the recovery path works
 func TestForward_HookPanic_IsRecoveredAsError(t *testing.T) {
 	t.Parallel()
 
@@ -112,6 +135,13 @@ func TestForward_HookPanic_IsRecoveredAsError(t *testing.T) {
 	}
 }
 
+// TestForward_ConcurrentRequestsToDifferentTargets_NoCrossTalkNoRace
+// exercises the full production shape: a single shared *client.Client
+// and a single shared *routing.Table (wrapped in one *Gateway), hit by
+// many concurrent goroutines targeting two different backends. No
+// request may ever receive the other backend's response. Run with
+// `go test -race` so the race detector also verifies there is no unsafe
+// concurrent memory access, not just a logically correct result.
 func TestForward_ConcurrentRequestsToDifferentTargets_NoCrossTalkNoRace(t *testing.T) {
 	t.Parallel()
 
