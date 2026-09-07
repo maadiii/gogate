@@ -71,17 +71,17 @@ func (g *Gateway) Forward(c context.Context, rc *app.RequestContext) {
 // duplicate (and independently stateful) proxies for the same target.
 func (g *Gateway) getOrCreateProxy(target string) (ProxyFunc, error) {
 	g.proxyMu.RLock()
-	defer g.proxyMu.RUnlock()
+	p, ok := g.proxies[target]
+	g.proxyMu.RUnlock()
 
-	if p, ok := g.proxies[target]; ok {
+	if ok {
 		return p, nil
 	}
 
 	g.proxyMu.Lock()
 	defer g.proxyMu.Unlock()
 
-	// Re-check: another goroutine may have built this target's proxy
-	// while we were waiting for the write lock.
+	// re-check: maybe another goroutine has made it in time
 	if p, ok := g.proxies[target]; ok {
 		return p, nil
 	}

@@ -3,19 +3,20 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/gogate/internal/routing"
 )
 
-// forward2 runs the full request pipeline for an already-resolved route:
+// forward runs the full request pipeline for an already-resolved route:
 // PreRequest hooks -> (if not aborted) proxy -> PostResponse hooks. Any
 // error at any stage routes into OnError hooks instead of continuing.
 func forward(route *routing.ResolvedRoute, proxy ProxyFunc, c context.Context, rc *app.RequestContext) {
 	if err := runStage(c, rc, route.PreRequestHooks); err != nil {
 		_ = rc.Error(err)
-		runOnError(c, rc, route)
+		runOnErrorWithFallback(c, rc, route, http.StatusInternalServerError)
 
 		return
 	}
@@ -26,23 +27,31 @@ func forward(route *routing.ResolvedRoute, proxy ProxyFunc, c context.Context, r
 
 	if err := proxy(c, rc); err != nil {
 		_ = rc.Error(err)
-		runOnError(c, rc, route)
+		runOnErrorWithFallback(c, rc, route, http.StatusBadGateway)
 
 		return
 	}
 
 	if err := runStage(c, rc, route.PostResponseHooks); err != nil {
 		_ = rc.Error(err)
-		runOnError(c, rc, route)
+		runOnErrorWithFallback(c, rc, route, http.StatusInternalServerError)
 	}
 }
 
-func runStage(c context.Context, rc *app.RequestContext, hooks []hook.Hook) error {
+func runStage(c context.Context, rc *app.RequestContext, hooks []hook.Hook) (err error) {
+	var currentHookName string
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("hook %q panicked: %v", currentHookName, r)
+		}
+	}()
+
 	for _, h := range hooks {
 		if rc.IsAborted() {
 			break
 		}
 
+		currentHookName = h.Name()
 		if err := h.Execute(c, rc); err != nil {
 			return fmt.Errorf("hook %q failed: %w", h.Name(), err)
 		}
@@ -51,14 +60,19 @@ func runStage(c context.Context, rc *app.RequestContext, hooks []hook.Hook) erro
 	return nil
 }
 
-// runOnError executes the route's OnError hooks. If they themselves
-// fail (or panic, via the same recovery inside runStage), that failure
-// is recorded rather than silently discarded, so it remains visible in
-// rc.Errors for observability even though the response the caller
-// receives is whatever status the OnError hooks (or the framework
-// default) ultimately set.
-func runOnError(c context.Context, rc *app.RequestContext, route *routing.ResolvedRoute) {
+// runOnErrorWithFallback runs the route's OnError hooks (if any), then
+// guarantees the response reflects a real failure. If no OnError hook
+// ran (or none of them explicitly set a status via Abort), the caller
+// must never see a misleadingly successful-looking response — a
+// sensible default status is forced instead.
+func runOnErrorWithFallback(
+	c context.Context, rc *app.RequestContext, route *routing.ResolvedRoute, fallbackStatus int,
+) {
 	if err := runStage(c, rc, route.OnErrorHooks); err != nil {
 		_ = rc.Error(fmt.Errorf("onError hook also failed: %w", err))
+	}
+
+	if !rc.IsAborted() {
+		rc.AbortWithStatus(fallbackStatus)
 	}
 }
