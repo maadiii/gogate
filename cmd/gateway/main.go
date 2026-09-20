@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
+	"io/fs"
 	"log"
+	"os"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app/client"
@@ -14,7 +18,7 @@ import (
 )
 
 const (
-	maxConnWiatTime = 2 * time.Second
+	maxConnWaitTime = 2 * time.Second
 	maxReadTimeout  = 10 * time.Second
 	maxWriteTimeout = 10 * time.Second
 	maxIdleTimeout  = 60 * time.Second
@@ -25,7 +29,20 @@ const (
 )
 
 func main() {
-	cfg, err := config.Load("gateway.yaml")
+	var configPath string
+
+	flag.StringVar(&configPath, "config", "", "path to the gateway configuration file (required)")
+	flag.Parse()
+
+	if configPath == "" {
+		panic("the -config flag is required: no configuration file was specified")
+	}
+
+	if _, err := os.Stat(configPath); errors.Is(err, fs.ErrNotExist) {
+		panic(fmt.Sprintf("config file %q does not exist", configPath))
+	}
+
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
@@ -38,7 +55,7 @@ func main() {
 	}
 
 	client, err := client.NewClient(
-		client.WithMaxConnWaitTimeout(maxConnWiatTime),
+		client.WithMaxConnWaitTimeout(maxConnWaitTime),
 	)
 	if err != nil {
 		log.Fatalf("creating hertz client: %v", err)

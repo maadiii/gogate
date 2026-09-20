@@ -59,7 +59,7 @@ func TestForward_MalformedTarget_Returns502(t *testing.T) {
 	t.Parallel()
 
 	gw := buildGateway(t, hook.NewRegistry(), routeSpec{
-		path: "/broken", methods: []string{"GET"}, target: "mallformed",
+		path: "/broken", methods: []string{"GET"}, target: "malformed",
 	})
 
 	rc := newTestContext("GET", "/broken")
@@ -206,6 +206,9 @@ func TestForward_PostResponseError_RunsOnErrorAfterSuccessfulProxy(t *testing.T)
 	t.Parallel()
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A header and a body that must never reach the client under an error
+		// status - see the assertions at the end of this test.
+		w.Header().Set("X-Backend", "yes")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("original-backend-body"))
 	}))
@@ -218,11 +221,16 @@ func TestForward_PostResponseError_RunsOnErrorAfterSuccessfulProxy(t *testing.T)
 		},
 	}
 
-	var onErrorRan atomic.Bool
+	var (
+		onErrorRan atomic.Bool
+		failedSeen bool
+		failedResp *hook.FailedResponse
+	)
 	onErrorHook := &recordingHook{
 		name: "fallback_after_post_failure", stage: hook.OnError,
 		execute: func(ctx context.Context, rc *app.RequestContext) error {
 			onErrorRan.Store(true)
+			failedResp, failedSeen = hook.FailedResponseFrom(rc)
 			rc.AbortWithStatus(http.StatusBadGateway)
 
 			return nil
@@ -249,6 +257,93 @@ func TestForward_PostResponseError_RunsOnErrorAfterSuccessfulProxy(t *testing.T)
 	}
 	if got := rc.Response.StatusCode(); got != http.StatusBadGateway {
 		t.Errorf("expected status 502 from OnError fallback, got %d", got)
+	}
+
+	// A PostResponse hook failed *after* the backend answered successfully, so
+	// the response briefly held that backend's whole payload. None of it may
+	// survive into the error response: delivering the unshaped payload under an
+	// error status is how a failing transform would hand the client exactly the
+	// fields it exists to strip.
+	if got := string(rc.Response.Body()); got != "" {
+		t.Errorf("expected the error response to carry no body, got %q", got)
+	}
+	if got := rc.Response.Header.Get("X-Backend"); got != "" {
+		t.Errorf("expected the backend's headers to be dropped, got X-Backend=%q", got)
+	}
+
+	// A stale Content-Length is its own bug: it would tell the client to read a
+	// body that is no longer there. Absent or "0" are both fine for an empty
+	// body; anything else is not.
+	if got := rc.Response.Header.Get("Content-Length"); got != "" && got != "0" {
+		t.Errorf("expected Content-Length to be absent or 0 for the empty error body, got %q", got)
+	}
+
+	// The payload must be gone from what the client receives, but the OnError
+	// stage must still be able to see it. Without that, an audit or
+	// error-formatting hook could no longer report what the backend actually
+	// said - it would know only that something failed. Both halves matter, and
+	// they are asserted separately so a regression in either one is visible.
+	if !failedSeen || failedResp == nil {
+		t.Fatal("expected the OnError hook to see the discarded downstream response, but none was captured")
+	}
+	if failedResp.StatusCode != http.StatusOK {
+		t.Errorf("expected the captured response to be the backend's 200, got %d", failedResp.StatusCode)
+	}
+	if got := string(failedResp.Body); got != "original-backend-body" {
+		t.Errorf("expected the captured body %q, got %q", "original-backend-body", got)
+	}
+	if got := failedResp.Header.Get("X-Backend"); got != "yes" {
+		t.Errorf("expected the captured X-Backend header %q, got %q", "yes", got)
+	}
+}
+
+// TestForward_ProxyError_CapturesNoFailedResponse locks in the other half of
+// the capture rule. When the backend never answered there is no downstream
+// response to preserve, and an OnError hook must be able to tell that apart
+// from a backend that answered and had its answer discarded - otherwise
+// "the backend said nothing" and "the backend said 200" would look identical.
+func TestForward_ProxyError_CapturesNoFailedResponse(t *testing.T) {
+	t.Parallel()
+
+	const unreachableTarget = "http://127.0.0.1:1"
+
+	var (
+		onErrorRan atomic.Bool
+		failedSeen bool
+	)
+
+	onErrorHook := &recordingHook{
+		name: "fallback_after_proxy_failure", stage: hook.OnError,
+		execute: func(ctx context.Context, rc *app.RequestContext) error {
+			onErrorRan.Store(true)
+			_, failedSeen = hook.FailedResponseFrom(rc)
+			rc.AbortWithStatus(http.StatusBadGateway)
+
+			return nil
+		},
+	}
+
+	registry := hook.NewRegistry()
+	registerHook(t, registry, onErrorHook)
+
+	gw := buildGateway(t, registry, routeSpec{
+		path: "/ping", methods: []string{"GET"}, target: unreachableTarget,
+		hooks: config.RouteHooks{
+			OnError: config.HookRefList{{Name: onErrorHook.name}},
+		},
+	})
+
+	rc := newTestContext("GET", "/ping")
+	gw.Forward(context.Background(), rc)
+
+	if !onErrorRan.Load() {
+		t.Fatal("expected the OnError hook to run after a proxy failure, but it did not")
+	}
+	if failedSeen {
+		t.Error("expected no captured downstream response when the backend never answered, but one was captured")
+	}
+	if got := rc.Response.StatusCode(); got != http.StatusBadGateway {
+		t.Errorf("expected status 502, got %d", got)
 	}
 }
 

@@ -15,11 +15,11 @@ type Route struct {
 
 func (r Route) validate(svcName string, idx int) error {
 	if r.Path == "" {
-		return fmt.Errorf("services.%s.route[%d].path: cannot not be empty", svcName, idx)
+		return fmt.Errorf("services.%s.routes[%d].path: cannot be empty", svcName, idx)
 	}
 
 	if len(r.Methods) == 0 {
-		return fmt.Errorf("services.%s.routes[%d].method: must have at least one method", svcName, idx)
+		return fmt.Errorf("services.%s.routes[%d].methods: must have at least one method", svcName, idx)
 	}
 
 	if err := r.Hooks.PreRequest.validate(svcName, idx, "pre_request"); err != nil {
@@ -50,7 +50,7 @@ func (h HookRefList) validate(svcName string, idx int, stage string) error {
 	for j, ref := range h {
 		if ref.Name == "" {
 			return fmt.Errorf(
-				"services.%s.routes[%d].hooks.%s[%d].name: cannot not be empty",
+				"services.%s.routes[%d].hooks.%s[%d].name: cannot be empty",
 				svcName, idx, stage, j,
 			)
 		}

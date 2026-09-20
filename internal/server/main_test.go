@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -102,6 +103,37 @@ func mustRun(t *testing.T, timeout time.Duration, fn func()) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		t.Fatalf("test did not complete within %s - likely dealock", timeout)
+		t.Fatalf("test did not complete within %s - likely deadlock", timeout)
 	}
+}
+
+// runConcurrently invokes fn(i) for every i in [0, n) with at most
+// maxInFlight calls running at any instant.
+//
+// The bound is not a performance tweak, it is what makes concurrency tests
+// meaningful. Backends in these tests are httptest servers, whose listeners
+// have a finite accept backlog. Firing thousands of simultaneous connection
+// attempts at one makes the OS start refusing connections, and the gateway
+// then correctly answers 502 for reasons that have nothing to do with the
+// property under test. Bounding in-flight requests keeps every failure a real
+// one, so a red test always means a genuine bug.
+func runConcurrently(n, maxInFlight int, fn func(i int)) {
+	sem := make(chan struct{}, maxInFlight)
+
+	var wg sync.WaitGroup
+
+	for i := range n {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			fn(i)
+		}()
+	}
+
+	wg.Wait()
 }

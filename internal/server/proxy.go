@@ -33,6 +33,18 @@ func newProxyFunc(target string, cli *client.Client) (ProxyFunc, error) {
 	}
 	rp.SetClient(cli)
 
+	// Bound the entire client operation — dial, write and response read — by
+	// the same budget the pipeline already gets (defaultProxyTimeout).
+	//
+	// This is not redundant with the deadline on the request context. The hertz
+	// client only consults that context at the top of its retry loop, so a
+	// context deadline cannot interrupt a read that is already blocked on a
+	// backend which accepted the connection and then went silent. Only a
+	// request-level timeout reaches calcTimeout -> conn.SetReadTimeout; without
+	// it, such a read is bounded by the client's own ReadTimeout, which
+	// defaults to 3 minutes.
+	rp.SetClientBehavior(reverseproxy.ClientDoTimeout(defaultProxyTimeout))
+
 	// Capture the real error (connection refused, timeout, DNS failure,
 	// etc.) instead of relying on an inferred zero status code, which is
 	// unreliable if the library's default error handling already writes
@@ -46,7 +58,7 @@ func newProxyFunc(target string, cli *client.Client) (ProxyFunc, error) {
 
 		if proxyErr, exists := rc.Get(proxyErrorKey); exists {
 			if err, ok := proxyErr.(error); ok {
-				return fmt.Errorf("proxying requset to %q: %w", target, err)
+				return fmt.Errorf("proxying request to %q: %w", target, err)
 			}
 		}
 

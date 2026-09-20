@@ -12,7 +12,7 @@ func NewRegistry() Registry {
 
 func (r *registry) Register(name string, factory HookFactory) error {
 	if name == "" {
-		return fmt.Errorf("registering hook factory: name cannot not be empty")
+		return fmt.Errorf("registering hook factory: name cannot be empty")
 	}
 
 	if _, exists := r.factories[name]; exists {
@@ -32,7 +32,7 @@ func (r *registry) Build(name string, config map[string]any) (Hook, error) {
 
 	h, err := factory(config)
 	if err != nil {
-		return nil, fmt.Errorf("building hok %q: %w", name, err)
+		return nil, fmt.Errorf("building hook %q: %w", name, err)
 	}
 	if h.Name() != name {
 		return nil, fmt.Errorf(

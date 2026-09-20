@@ -53,10 +53,19 @@ func (g *Gateway) Forward(c context.Context, rc *app.RequestContext) {
 		return
 	}
 
-	// Bound the backend call with a timeout so a hanging downstream
-	// service cannot block this request forever. This only wraps the
-	// proxy call, not hook execution — hooks are expected to manage any
-	// of their own I/O timeouts internally.
+	// Give the whole downstream pipeline — hook execution and the backend
+	// call alike — a single deadline, so the request has one time budget
+	// rather than one per stage. The consequence to be aware of is that hooks
+	// share the backend's budget: a slow PreRequest hook eats into the time
+	// left for the proxy call.
+	//
+	// This deadline is not, by itself, enough to end a request. It is a
+	// context deadline, and the hertz client only consults the context at the
+	// top of its retry loop — a read already blocked on a backend that went
+	// silent never observes it. newProxyFunc therefore also sets a
+	// request-level timeout, which is what actually reaches the socket's read
+	// deadline. Both are defaultProxyTimeout, so the request has one budget
+	// either way; see the note there for why both are needed.
 	ctx, cancel := context.WithTimeout(c, defaultProxyTimeout)
 	defer cancel()
 

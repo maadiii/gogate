@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/maadiii/gogate/config"
 	"github.com/maadiii/gogate/internal/hook"
 )
@@ -138,62 +137,88 @@ func TestForward_HookPanic_IsRecoveredAsError(t *testing.T) {
 // TestForward_ConcurrentRequestsToDifferentTargets_NoCrossTalkNoRace
 // exercises the full production shape: a single shared *client.Client
 // and a single shared *routing.Table (wrapped in one *Gateway), hit by
-// many concurrent goroutines targeting two different backends. No
-// request may ever receive the other backend's response. Run with
-// `go test -race` so the race detector also verifies there is no unsafe
-// concurrent memory access, not just a logically correct result.
+// many concurrent goroutines targeting several different backends. No
+// request may ever receive another backend's response.
+//
+// Two things this test deliberately does differently from a naive
+// version of itself:
+//
+//  1. Concurrency is bounded (see runConcurrently). An unbounded version
+//     of this test makes the httptest listeners refuse connections, and
+//     the resulting 502s are indistinguishable from real cross-talk in
+//     the assertion — so the property under test ends up never actually
+//     being checked.
+//
+//  2. A transport failure (any non-200) is reported as its own distinct
+//     failure rather than being folded into the body comparison. If the
+//     gateway ever fails to reach a backend, that must be loud, not
+//     silently counted as "got an empty body".
 func TestForward_ConcurrentRequestsToDifferentTargets_NoCrossTalkNoRace(t *testing.T) {
 	t.Parallel()
 
-	backendA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("response-from-A"))
-	}))
-	defer backendA.Close()
-
-	backendB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("response-from-B"))
-	}))
-	defer backendB.Close()
-
-	gw := buildGateway(
-		t, hook.NewRegistry(),
-		routeSpec{path: "/a", methods: []string{"GET"}, target: backendA.URL},
-		routeSpec{path: "/b", methods: []string{"GET"}, target: backendB.URL},
+	const (
+		backendCount = 4
+		iterations   = 2000
+		maxInFlight  = 24
 	)
 
-	const iterations = 3000
-	mustRun(t, 15*time.Second, func() {
-		var wg sync.WaitGroup
-		errCh := make(chan error, iterations)
+	// Each backend answers with a marker derived only from its own index,
+	// so a response carrying another backend's marker is undeniable
+	// cross-talk.
+	bodies := make([]string, backendCount)
+	specs := make([]routeSpec, backendCount)
 
-		for i := range iterations {
-			wg.Go(func() {
-				var path, expected string
-				if i%2 == 0 {
-					path, expected = "/a", "response-from-A"
-				} else {
-					path, expected = "/b", "response-from-B"
-				}
+	for i := range backendCount {
+		body := fmt.Sprintf("response-from-%d", i)
+		bodies[i] = body
 
-				rc := ut.CreateUtRequestContext("GET", path, &ut.Body{})
-				gw.Forward(context.Background(), rc)
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(backend.Close)
 
-				got := string(rc.Response.Body())
-				if got != expected {
-					errCh <- fmt.Errorf(
-						"iteration %d: requested %q, expected body %q, got %q (possible cross-talk)",
-						i, path, expected, got,
-					)
-				}
-			})
+		specs[i] = routeSpec{
+			path:    fmt.Sprintf("/backend-%d", i),
+			methods: []string{"GET"},
+			target:  backend.URL,
 		}
+	}
 
-		wg.Wait()
-		close(errCh)
-		for err := range errCh {
-			t.Error(err)
-		}
+	gw := buildGateway(t, hook.NewRegistry(), specs...)
+
+	errCh := make(chan error, iterations)
+
+	mustRun(t, 30*time.Second, func() {
+		runConcurrently(iterations, maxInFlight, func(i int) {
+			want := i % backendCount
+			path := fmt.Sprintf("/backend-%d", want)
+
+			rc := newTestContext("GET", path)
+			gw.Forward(context.Background(), rc)
+
+			if code := rc.Response.StatusCode(); code != http.StatusOK {
+				errCh <- fmt.Errorf(
+					"iteration %d: GET %s: transport failure, status %d, not cross-talk: %v",
+					i, path, code, rc.Errors,
+				)
+
+				return
+			}
+
+			if got := string(rc.Response.Body()); got != bodies[want] {
+				errCh <- fmt.Errorf(
+					"iteration %d: GET %s: expected body %q, got %q (CROSS-TALK)",
+					i, path, bodies[want], got,
+				)
+			}
+		})
 	})
+
+	close(errCh)
+
+	for err := range errCh {
+		t.Error(err)
+	}
 }
 
 // TestForward_ConcurrentRequestsToSameRoute_SharedHookInstance verifies
