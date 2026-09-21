@@ -27,6 +27,7 @@ func Load(path string) (*Config, error) {
 
 type Config struct {
 	Port     int                `yaml:"port"`
+	AppName  string             `yaml:"appName"`
 	Auth     Auth               `yaml:"auth"`
 	Services map[string]Service `yaml:"services"`
 }

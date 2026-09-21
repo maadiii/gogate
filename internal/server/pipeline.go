@@ -93,11 +93,6 @@ func runStage(c context.Context, rc *app.RequestContext, hooks []hook.Hook) (err
 	}()
 
 	for _, h := range hooks {
-		if rc.IsAborted() {
-			break
-		}
-
-		currentHookName = h.Name()
 		if err := h.Execute(c, rc); err != nil {
 			return fmt.Errorf("hook %q failed: %w", h.Name(), err)
 		}

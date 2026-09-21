@@ -15,6 +15,7 @@ import (
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/gogate/internal/routing"
 	"github.com/maadiii/gogate/internal/server"
+	"github.com/maadiii/gogate/pkg/hooks"
 )
 
 const (
@@ -29,17 +30,28 @@ const (
 )
 
 func main() {
+	cfg := getConfig()
+	reg := getRegistry(cfg)
+	tbl := buildRoutingTable(cfg, reg)
+	cli := getHttpClient()
+	s := makeServer(tbl, cli, cfg)
+
+	log.Printf("gateway running on :%d", cfg.Port)
+	s.Spin()
+}
+
+func getConfig() *config.Config {
 	var configPath string
 
 	flag.StringVar(&configPath, "config", "", "path to the gateway configuration file (required)")
 	flag.Parse()
 
 	if configPath == "" {
-		panic("the -config flag is required: no configuration file was specified")
+		log.Fatal("the -config flag is required: no configuration file was specified")
 	}
 
 	if _, err := os.Stat(configPath); errors.Is(err, fs.ErrNotExist) {
-		panic(fmt.Sprintf("config file %q does not exist", configPath))
+		log.Fatalf("config file %q does not exist", configPath)
 	}
 
 	cfg, err := config.Load(configPath)
@@ -47,13 +59,28 @@ func main() {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	registry := hook.NewRegistry()
+	return cfg
+}
 
-	table, err := routing.Build(cfg, registry)
+func getRegistry(cfg *config.Config) hook.Registry {
+	reg := hook.NewRegistry()
+	if err := hooks.Register(reg, cfg); err != nil {
+		log.Fatalf("registering hooks: %v", err)
+	}
+
+	return reg
+}
+
+func buildRoutingTable(cfg *config.Config, reg hook.Registry) *routing.Table {
+	table, err := routing.Build(cfg, reg)
 	if err != nil {
 		log.Fatalf("building routing table: %v", err)
 	}
 
+	return table
+}
+
+func getHttpClient() *client.Client {
 	client, err := client.NewClient(
 		client.WithMaxConnWaitTimeout(maxConnWaitTime),
 	)
@@ -61,7 +88,11 @@ func main() {
 		log.Fatalf("creating hertz client: %v", err)
 	}
 
-	gw := server.NewGateway(table, client)
+	return client
+}
+
+func makeServer(tbl *routing.Table, client *client.Client, cfg *config.Config) *hertz.Hertz {
+	gw := server.NewGateway(tbl, client)
 
 	s := hertz.New(
 		hertz.WithHostPorts(fmt.Sprintf(":%d", cfg.Port)),
@@ -74,6 +105,5 @@ func main() {
 	)
 	s.Any("/*path", gw.Forward)
 
-	log.Printf("gateway running on :%d", cfg.Port)
-	s.Spin()
+	return s
 }
