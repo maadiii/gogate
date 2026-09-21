@@ -75,26 +75,70 @@ func bearerToken(header []byte) (string, bool) {
 	return token, true
 }
 
+// reject answers the client with 401 instead of returning an error.
+//
+// An auth rejection is this hook's own response, not a failure of the pipeline:
+// returning an error would route it into the OnError stage, where the status
+// follows from the error's code and a missing token would be reported as a
+// server fault. Aborting also short-circuits the stage, which is what keeps an
+// unauthenticated request from reaching a backend the caller may not touch.
+//
+// The error is recorded along with the status, so ErrorHandler can shape the
+// body; because the status is derived from the recorded error, the two cannot
+// disagree about what went wrong.
+func reject(rc *app.RequestContext) error {
+	appErr := errors.Unauthorized()
+	_ = rc.AbortWithError(errors.StatusOf(appErr), appErr)
+
+	return nil
+}
+
+// identityOf returns the identity shared across hooks for this request,
+// creating it on first use.
+//
+// It must tolerate the state being absent. A hook is built once at startup and
+// shared across every request, so it cannot assume anything ran before it on
+// this particular request — and a missing value read with the single-value form
+// of a type assertion panics, which the pipeline recovers and reports as a
+// server fault. That would make every authenticated request a 500.
+//
+// TODO: this is provisional. Where shared hook state lives, what its key
+// namespace is, and whether a middleware has to seed it are still open
+// questions (roadmap Phase 2, item 1), and this hook should not be the thing
+// that decides them by default.
+func identityOf(rc *app.RequestContext) *State {
+	if existing, ok := rc.Get(stateKey); ok {
+		if state, ok := existing.(*State); ok {
+			return state
+		}
+	}
+
+	state := new(State)
+	rc.Set(stateKey, state)
+
+	return state
+}
+
 // Execute implements [hook.Hook].
 func (a *Auth) Execute(c context.Context, rc *app.RequestContext) error {
 	token, ok := bearerToken(rc.GetHeader("Authorization"))
 	if !ok {
-		return errors.Unauthorized()
+		return reject(rc)
 	}
 
 	claims, err := a.paseto.ValidateAccess(token)
 	if err != nil {
-		return errors.Unauthorized()
+		return reject(rc)
 	}
 
-	state, _ := rc.Get(stateKey)
+	state := identityOf(rc)
 
-	state.(*State).userId = claims.Subject
+	state.userId = claims.Subject
 	rc.Request.Header.Set("X-UserID", claims.Subject)
 
 	roles, ok := claims.CustomClaims["roles"].([]string)
 	if ok {
-		state.(*State).roles = roles
+		state.roles = roles
 
 		for _, role := range roles {
 			rc.Request.Header.Add("X-Roles", role)
@@ -103,7 +147,7 @@ func (a *Auth) Execute(c context.Context, rc *app.RequestContext) error {
 
 	perms, ok := claims.CustomClaims["perms"].([]string)
 	if ok {
-		state.(*State).permissions = perms
+		state.permissions = perms
 
 		for _, perm := range perms {
 			rc.Request.Header.Add("X-Perms", perm)

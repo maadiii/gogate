@@ -3,20 +3,22 @@ package server
 import (
 	"context"
 	"fmt"
-	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/gogate/internal/routing"
+	"github.com/maadiii/gogate/pkg/errors"
 )
 
 // forward runs the full request pipeline for an already-resolved route:
 // PreRequest hooks -> (if not aborted) proxy -> PostResponse hooks. Any
-// error at any stage routes into OnError hooks instead of continuing.
+// error at any stage is recorded as a coded error and routed into the
+// OnError hooks instead of continuing.
 func forward(route *routing.ResolvedRoute, proxy ProxyFunc, c context.Context, rc *app.RequestContext) {
 	if err := runStage(c, rc, route.PreRequestHooks); err != nil {
-		_ = rc.Error(err)
-		runOnErrorWithFallback(c, rc, route, http.StatusInternalServerError)
+		appErr := errors.Wrap(err)
+		_ = rc.Error(appErr)
+		runOnErrorWithFallback(c, rc, route, appErr)
 
 		return
 	}
@@ -26,18 +28,30 @@ func forward(route *routing.ResolvedRoute, proxy ProxyFunc, c context.Context, r
 	}
 
 	if err := proxy(c, rc); err != nil {
-		_ = rc.Error(err)
+		appErr := errors.BadGateway(err)
+		_ = rc.Error(appErr)
 		clearResponse(rc)
-		runOnErrorWithFallback(c, rc, route, http.StatusBadGateway)
+		runOnErrorWithFallback(c, rc, route, appErr)
 
 		return
 	}
 
 	if err := runStage(c, rc, route.PostResponseHooks); err != nil {
-		_ = rc.Error(err)
+		appErr := errors.Wrap(err)
+		_ = rc.Error(appErr)
 		discardProxiedResponse(rc)
-		runOnErrorWithFallback(c, rc, route, http.StatusInternalServerError)
+		runOnErrorWithFallback(c, rc, route, appErr)
 	}
+}
+
+// abortWith answers the client with the error's own status, recording the error
+// alongside it so that ErrorHandler shapes the body and the status it writes
+// agrees with the one set here.
+//
+// The status is derived from the error rather than passed in, so the two cannot
+// be told different things about the same failure.
+func abortWith(rc *app.RequestContext, appErr error) {
+	_ = rc.AbortWithError(errors.StatusOf(appErr), appErr)
 }
 
 // discardProxiedResponse keeps a copy of the downstream response for the
@@ -108,18 +122,27 @@ func runStage(c context.Context, rc *app.RequestContext, hooks []hook.Hook) (err
 }
 
 // runOnErrorWithFallback runs the route's OnError hooks (if any), then
-// guarantees the response reflects a real failure. If no OnError hook
-// ran (or none of them explicitly set a status via Abort), the caller
-// must never see a misleadingly successful-looking response — a
-// sensible default status is forced instead.
+// guarantees the response reflects a real failure. If no OnError hook ran (or
+// none of them explicitly set a status via Abort), the caller must never see a
+// misleadingly successful-looking response — the status that appErr's code maps
+// to is forced instead.
+//
+// appErr is the failure that brought us here, not just a status, because the
+// status is a consequence of what went wrong rather than an independent choice.
+// It is what keeps this fallback and ErrorHandler agreeing about the same
+// failure without either having to know about the other.
 func runOnErrorWithFallback(
-	c context.Context, rc *app.RequestContext, route *routing.ResolvedRoute, fallbackStatus int,
+	c context.Context, rc *app.RequestContext, route *routing.ResolvedRoute, appErr error,
 ) {
 	if err := runStage(c, rc, route.OnErrorHooks); err != nil {
+		// Deliberately left uncoded. This is bookkeeping about a hook failing
+		// during error handling, not a statement about what the client should
+		// be told: recording it as a coded error would let it displace the
+		// failure that actually brought us here.
 		_ = rc.Error(fmt.Errorf("onError hook also failed: %w", err))
 	}
 
 	if !rc.IsAborted() {
-		rc.AbortWithStatus(fallbackStatus)
+		rc.AbortWithStatus(errors.StatusOf(appErr))
 	}
 }

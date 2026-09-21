@@ -3,13 +3,13 @@ package server
 import (
 	"context"
 	"log"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/client"
 	"github.com/maadiii/gogate/internal/routing"
+	"github.com/maadiii/gogate/pkg/errors"
 )
 
 const defaultProxyTimeout = 10 * time.Second
@@ -38,7 +38,7 @@ func NewGateway(table *routing.Table, cli *client.Client) *Gateway {
 func (g *Gateway) Forward(c context.Context, rc *app.RequestContext) {
 	route, ok := g.table.Resolve(string(rc.Method()), string(rc.Path()))
 	if !ok {
-		rc.NotFound()
+		abortWith(rc, errors.NotFound("route"))
 
 		return
 	}
@@ -48,7 +48,7 @@ func (g *Gateway) Forward(c context.Context, rc *app.RequestContext) {
 		// A malformed target must never take down the whole gateway process.
 		// A single bad route configuration degrades to a 502 for requests on that route only.
 		log.Printf("creating proxy for target %q: %v", route.Target, err)
-		rc.AbortWithStatus(http.StatusBadGateway)
+		abortWith(rc, errors.BadGateway(err))
 
 		return
 	}

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -15,6 +15,7 @@ import (
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/gogate/internal/routing"
 	"github.com/maadiii/gogate/internal/server"
+	"github.com/maadiii/gogate/pkg/errors"
 	"github.com/maadiii/gogate/pkg/hooks"
 )
 
@@ -27,6 +28,12 @@ const (
 	maxRequestBodyBytes = 10 << 20
 	maxHeaderBytes      = 1 << 20
 	maxKeepBodyBytes    = 4 << 20
+
+	// isProd decides whether error responses carry a stack trace. It is fixed
+	// here until it is wired to the config file; running as production without
+	// the flag being settable would leak stack traces, so the safe default is
+	// the verbose one only while this is a development setting.
+	isProd = false
 )
 
 func main() {
@@ -50,7 +57,7 @@ func getConfig() *config.Config {
 		log.Fatal("the -config flag is required: no configuration file was specified")
 	}
 
-	if _, err := os.Stat(configPath); errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(configPath); stderrors.Is(err, fs.ErrNotExist) {
 		log.Fatalf("config file %q does not exist", configPath)
 	}
 
@@ -103,6 +110,10 @@ func makeServer(tbl *routing.Table, client *client.Client, cfg *config.Config) *
 		hertz.WithWriteTimeout(maxWriteTimeout),
 		hertz.WithIdleTimeout(maxIdleTimeout),
 	)
+	// ErrorHandler is registered before the route so that it wraps every
+	// request: it runs ahead of Forward and finishes after it, which is what
+	// lets it turn whatever error was recorded into the client's response.
+	s.Use(errors.ErrorHandler(isProd))
 	s.Any("/*path", gw.Forward)
 
 	return s
