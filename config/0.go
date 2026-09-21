@@ -27,12 +27,17 @@ func Load(path string) (*Config, error) {
 
 type Config struct {
 	Port     int                `yaml:"port"`
+	Auth     Auth               `yaml:"auth"`
 	Services map[string]Service `yaml:"services"`
 }
 
 func (c Config) validate() error { //nolint
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("port: must be a valid port number (1-65535)")
+	}
+
+	if err := c.Auth.validate(); err != nil {
+		return err
 	}
 
 	if len(c.Services) == 0 {
