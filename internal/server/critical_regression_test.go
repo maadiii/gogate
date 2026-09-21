@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,6 +130,17 @@ func TestForward_HookPanic_IsRecoveredAsError(t *testing.T) {
 	if len(rc.Errors) == 0 {
 		t.Error("expected the panic to be recorded as an error via rc.Error(), but rc.Errors is empty")
 	}
+
+	// Recording the panic as an error is only half the job: the error has to
+	// say which hook panicked. Without that, a panic somewhere in a chain is
+	// undebuggable, and the deferred recover in runStage is left formatting an
+	// empty name — `hook "" panicked: ...` — which reads as though no hook were
+	// involved at all.
+	if len(rc.Errors) > 0 && !strings.Contains(rc.Errors[0].Error(), panickingHook.name) {
+		t.Errorf("expected the recorded error to name the panicking hook %q, got %q",
+			panickingHook.name, rc.Errors[0].Error())
+	}
+
 	if got := rc.Response.StatusCode(); got != http.StatusInternalServerError {
 		t.Errorf("expected status 500 from the OnError fallback after a panic, got %d", got)
 	}
