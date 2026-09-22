@@ -428,8 +428,8 @@ func TestE2E_AuthHook_AuthenticatesForwardsAndRejects(t *testing.T) {
 	cfg := &config.Config{
 		Port: 8000, AppName: issuer,
 		Auth: config.Auth{
-			AccessToken:  config.AccessToken{Secret: accessSecret, TTL: config.Duration(time.Hour)},
-			RefreshToken: config.RefreshToken{Secret: refreshSecret, TTL: config.Duration(time.Hour)},
+			AccessToken:  config.AccessToken{PublicKey: accessSecret},
+			RefreshToken: config.RefreshToken{PublicKey: refreshSecret},
 		},
 	}
 	registry := hook.NewRegistry()
@@ -545,8 +545,8 @@ func TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated(t *testing.T) {
 	cfg := &config.Config{
 		Port: 8000, AppName: issuer,
 		Auth: config.Auth{
-			AccessToken:  config.AccessToken{Secret: accessSecret, TTL: config.Duration(time.Hour)},
-			RefreshToken: config.RefreshToken{Secret: refreshSecret, TTL: config.Duration(time.Hour)},
+			AccessToken:  config.AccessToken{PublicKey: accessSecret},
+			RefreshToken: config.RefreshToken{PublicKey: refreshSecret},
 		},
 	}
 	registry := hook.NewRegistry()

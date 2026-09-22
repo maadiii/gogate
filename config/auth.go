@@ -16,23 +16,21 @@ type Auth struct {
 }
 
 type AccessToken struct {
-	Secret string   `yaml:"secret"`
-	TTL    Duration `yaml:"ttl"`
+	PublicKey string `yaml:"publicKey"`
 }
 
 type RefreshToken struct {
-	Secret string   `yaml:"secret"`
-	TTL    Duration `yaml:"ttl"`
+	PublicKey string `yaml:"publicKey"`
 }
 
 // set reports whether any field of the token block was supplied. This is what
 // tells an omitted block (zero value, valid) apart from a half-written one.
 func (a AccessToken) set() bool {
-	return a.Secret != "" || a.TTL != 0
+	return a.PublicKey != ""
 }
 
 func (r RefreshToken) set() bool {
-	return r.Secret != "" || r.TTL != 0
+	return r.PublicKey != ""
 }
 
 func (a Auth) validate() error {
@@ -46,7 +44,7 @@ func (a Auth) validate() error {
 		return fmt.Errorf("auth.accessToken: must be configured when auth is set")
 	}
 
-	if err := validateToken("auth.accessToken", a.AccessToken.Secret, a.AccessToken.TTL); err != nil {
+	if err := validateToken("auth.accessToken", a.AccessToken.PublicKey); err != nil {
 		return err
 	}
 
@@ -54,18 +52,14 @@ func (a Auth) validate() error {
 		return nil
 	}
 
-	return validateToken("auth.refreshToken", a.RefreshToken.Secret, a.RefreshToken.TTL)
+	return validateToken("auth.refreshToken", a.RefreshToken.PublicKey)
 }
 
 // validateToken checks one token block. field is the YAML path of the block, so
 // the error names exactly which setting is wrong.
-func validateToken(field, secret string, ttl Duration) error {
+func validateToken(field, secret string) error {
 	if secret == "" {
 		return fmt.Errorf("%s.secret: cannot be empty", field)
-	}
-
-	if ttl <= 0 {
-		return fmt.Errorf("%s.ttl: must be greater than zero", field)
 	}
 
 	return nil

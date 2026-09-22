@@ -212,12 +212,10 @@ func TestAuthHook_ThroughErrorHandler(t *testing.T) {
 		AppName: "gateway",
 		Auth: config.Auth{
 			AccessToken: config.AccessToken{
-				Secret: testTokenSecret,
-				TTL:    config.Duration(time.Hour),
+				PublicKey: testTokenSecret,
 			},
 			RefreshToken: config.RefreshToken{
-				Secret: testTokenSecret,
-				TTL:    config.Duration(2 * time.Hour),
+				PublicKey: testTokenSecret,
 			},
 		},
 	}
