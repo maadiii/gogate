@@ -18,7 +18,6 @@ import (
 	"github.com/maadiii/gogate/internal/hook"
 	apperrors "github.com/maadiii/gogate/pkg/errors"
 	concretehooks "github.com/maadiii/gogate/pkg/hooks"
-	"github.com/maadiii/goutils/auth"
 )
 
 // The tests in this file are the only ones that drive a real Hertz server
@@ -395,11 +394,7 @@ func TestE2E_WildcardAndExactPrecedence_ThroughRealRouter(t *testing.T) {
 // replaces forged identity headers, preserves the backend response, and blocks
 // an invalid token before it can reach the backend.
 func TestE2E_AuthHook_AuthenticatesForwardsAndRejects(t *testing.T) {
-	const (
-		issuer        = "auth-e2e"
-		accessSecret  = "01234567890123456789012345678901"
-		refreshSecret = "abcdefghijklmnopqrstuvwxyz123456"
-	)
+	const issuer = "auth-e2e"
 
 	backendCalls := make(chan struct{}, 2)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -425,13 +420,8 @@ func TestE2E_AuthHook_AuthenticatesForwardsAndRejects(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	cfg := &config.Config{
-		Port: 8000, AppName: issuer,
-		Auth: config.Auth{
-			AccessToken:  config.AccessToken{PublicKey: accessSecret},
-			RefreshToken: config.RefreshToken{PublicKey: refreshSecret},
-		},
-	}
+	authConfig, paseto := newPublicPasetoFixture(t, issuer)
+	cfg := &config.Config{Port: 8000, AppName: issuer, Auth: authConfig}
 	registry := hook.NewRegistry()
 	if err := concretehooks.Register(registry, cfg); err != nil {
 		t.Fatalf("registering auth hook: %v", err)
@@ -442,13 +432,6 @@ func TestE2E_AuthHook_AuthenticatesForwardsAndRejects(t *testing.T) {
 	})
 	addr := hertzAddrWithErrors(t, gw)
 
-	paseto, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
-		Issuer: issuer, AccessKey: []byte(accessSecret), RefreshKey: []byte(refreshSecret),
-		AccessTTL: time.Hour, RefreshTTL: time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("creating token issuer: %v", err)
-	}
 	tokens, err := paseto.Generate("user-42", "", map[string]any{
 		"roles": []string{"member", "billing"}, "perms": []string{"reports:read"},
 	})
@@ -518,11 +501,9 @@ func TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated(t *testing.T) {
 	t.Parallel()
 
 	const (
-		issuer        = "paseto-concurrency-e2e"
-		accessSecret  = "01234567890123456789012345678901"
-		refreshSecret = "abcdefghijklmnopqrstuvwxyz123456"
-		iterations    = 600
-		maxInFlight   = 24
+		issuer      = "paseto-concurrency-e2e"
+		iterations  = 600
+		maxInFlight = 24
 	)
 
 	var backendCalls atomic.Int64
@@ -542,13 +523,8 @@ func TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	cfg := &config.Config{
-		Port: 8000, AppName: issuer,
-		Auth: config.Auth{
-			AccessToken:  config.AccessToken{PublicKey: accessSecret},
-			RefreshToken: config.RefreshToken{PublicKey: refreshSecret},
-		},
-	}
+	authConfig, issuerPaseto := newPublicPasetoFixture(t, issuer)
+	cfg := &config.Config{Port: 8000, AppName: issuer, Auth: authConfig}
 	registry := hook.NewRegistry()
 	if err := concretehooks.Register(registry, cfg); err != nil {
 		t.Fatalf("registering paseto hook: %v", err)
@@ -558,14 +534,6 @@ func TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated(t *testing.T) {
 		hooks: config.RouteHooks{PreRequest: config.HookRefList{{Name: "paseto"}}},
 	})
 	addr := hertzAddrWithErrors(t, gw)
-
-	issuerPaseto, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
-		Issuer: issuer, AccessKey: []byte(accessSecret), RefreshKey: []byte(refreshSecret),
-		AccessTTL: time.Hour, RefreshTTL: time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("creating token issuer: %v", err)
-	}
 
 	tokens := make([]string, iterations)
 	for i := range iterations {

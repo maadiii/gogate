@@ -57,9 +57,9 @@ func (a Auth) validate() error {
 
 // validateToken checks one token block. field is the YAML path of the block, so
 // the error names exactly which setting is wrong.
-func validateToken(field, secret string) error {
-	if secret == "" {
-		return fmt.Errorf("%s.secret: cannot be empty", field)
+func validateToken(field, publicKey string) error {
+	if publicKey == "" {
+		return fmt.Errorf("%s.publicKey: cannot be empty", field)
 	}
 
 	return nil

@@ -9,7 +9,6 @@ import (
 	"github.com/maadiii/gogate/config"
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/gogate/pkg/errors"
-	"github.com/maadiii/goutils/auth"
 )
 
 func Register(reg hook.Registry, cfg *config.Config) error {
@@ -36,17 +35,7 @@ func registerAuth(reg hook.Registry, cfg *config.Config) error {
 			return nil, err
 		}
 
-		refreshPubkey, err := decodeBase64Key(cfg.Auth.RefreshToken.PublicKey, ed25519PublicKeySize)
-		if err != nil {
-			return nil, err
-		}
-
-		publicPaseto, err := auth.NewPublicPaseto(
-			auth.PublicPasetoConfig{
-				AccessPublicKey:  accessPubKey,
-				RefreshPublicKey: refreshPubkey,
-			},
-		)
+		publicPaseto, err := newPublicPasetoVerifier(accessPubKey)
 
 		return &Paseto{paseto: publicPaseto}, err
 	})

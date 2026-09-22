@@ -2,10 +2,92 @@ package hooks
 
 import (
 	"testing"
+	"time"
 
+	psto "aidanwoods.dev/go-paseto"
 	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/maadiii/gogate/internal/hook"
+	"github.com/maadiii/goutils/auth"
 )
+
+func newPublicPasetoTestIssuer(t *testing.T, accessTTL time.Duration) (*auth.PublicPaseto, []byte) {
+	t.Helper()
+
+	accessKey := psto.NewV4AsymmetricSecretKey()
+	refreshKey := psto.NewV4AsymmetricSecretKey()
+	issuer, err := auth.NewPublicPaseto(auth.PublicPasetoConfig{
+		Issuer:            "hooks-test",
+		AccessPrivateKey:  accessKey.ExportBytes(),
+		AccessPublicKey:   accessKey.Public().ExportBytes(),
+		RefreshPrivateKey: refreshKey.ExportBytes(),
+		RefreshPublicKey:  refreshKey.Public().ExportBytes(),
+		AccessTTL:         accessTTL,
+		RefreshTTL:        time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("creating public PASETO issuer: %v", err)
+	}
+
+	return issuer, accessKey.Public().ExportBytes()
+}
+
+func TestPublicPasetoVerifier_ValidatesClaimsWithPublicKey(t *testing.T) {
+	t.Parallel()
+
+	issuer, publicKey := newPublicPasetoTestIssuer(t, time.Hour)
+	tokens, err := issuer.Generate("user-1", "gateway", map[string]any{
+		"roles": []string{"member"}, "perms": []string{"reports:read"},
+	})
+	if err != nil {
+		t.Fatalf("generating token: %v", err)
+	}
+
+	verifier, err := newPublicPasetoVerifier(publicKey)
+	if err != nil {
+		t.Fatalf("creating verifier: %v", err)
+	}
+	claims, err := verifier.ValidateAccess(tokens.Access)
+	if err != nil {
+		t.Fatalf("validating token: %v", err)
+	}
+
+	if claims.Subject != "user-1" || claims.CustomClaims["roles"] == nil || claims.CustomClaims["perms"] == nil {
+		t.Fatalf("claims = %+v, want subject and custom claims", claims)
+	}
+}
+
+func TestPublicPasetoVerifier_RejectsWrongKeyAndExpiredToken(t *testing.T) {
+	t.Parallel()
+
+	issuer, publicKey := newPublicPasetoTestIssuer(t, -time.Minute)
+	tokens, err := issuer.Generate("user-1", "gateway", nil)
+	if err != nil {
+		t.Fatalf("generating expired token: %v", err)
+	}
+	verifier, err := newPublicPasetoVerifier(publicKey)
+	if err != nil {
+		t.Fatalf("creating verifier: %v", err)
+	}
+	if _, err := verifier.ValidateAccess(tokens.Access); err == nil {
+		t.Fatal("expected expired token to be rejected")
+	}
+
+	otherIssuer, otherPublicKey := newPublicPasetoTestIssuer(t, time.Hour)
+	otherTokens, err := otherIssuer.Generate("user-1", "gateway", nil)
+	if err != nil {
+		t.Fatalf("generating token with another key: %v", err)
+	}
+	otherVerifier, err := newPublicPasetoVerifier(otherPublicKey)
+	if err != nil {
+		t.Fatalf("creating other verifier: %v", err)
+	}
+	if _, err := verifier.ValidateAccess(otherTokens.Access); err == nil {
+		t.Fatal("expected token signed by another key to be rejected")
+	}
+	if _, err := otherVerifier.ValidateAccess(tokens.Access); err == nil {
+		t.Fatal("expected token signed by the old key to be rejected")
+	}
+}
 
 // TestBearerToken pins down the header parsing on its own, because this is
 // where the hook's one silent-failure mode lives: a credential that never

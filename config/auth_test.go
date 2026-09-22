@@ -1,12 +1,13 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/maadiii/gogate/config"
 )
 
-const testSecret = "test-secret"
+const testPublicKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
 
 // configWithAuth appends a top-level `auth:` block to an otherwise valid
 // config, so these tests go through the real Load path — YAML text, through the
@@ -23,12 +24,11 @@ services:
 ` + authBlock
 }
 
-func accessTokenBlock(ttl string) string {
+func accessTokenBlock() string {
 	return `
 auth:
   accessToken:
-    secret: ` + testSecret + `
-    ttl: ` + ttl + `
+    publicKey: "` + testPublicKey + `"
 `
 }
 
@@ -45,7 +45,7 @@ func TestLoad_AuthBlockIsOptional(t *testing.T) {
 func TestLoad_AuthRefreshTokenIsOptional(t *testing.T) {
 	t.Parallel()
 
-	path := writeTempConfig(t, configWithAuth(accessTokenBlock("15m")))
+	path := writeTempConfig(t, configWithAuth(accessTokenBlock()))
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -53,6 +53,45 @@ func TestLoad_AuthRefreshTokenIsOptional(t *testing.T) {
 	}
 
 	if cfg.Auth.RefreshToken.PublicKey != "" {
-		t.Errorf("expected no refresh token, got secret %q", cfg.Auth.RefreshToken.PublicKey)
+		t.Errorf("expected no refresh token, got public key %q", cfg.Auth.RefreshToken.PublicKey)
+	}
+	if cfg.Auth.AccessToken.PublicKey != testPublicKey {
+		t.Errorf("access public key = %q, want %q", cfg.Auth.AccessToken.PublicKey, testPublicKey)
+	}
+}
+
+func TestLoad_AuthRejectsRefreshTokenWithoutAccessToken(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, configWithAuth(`
+auth:
+  refreshToken:
+    publicKey: "`+testPublicKey+`"
+`))
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected refresh-only auth configuration to fail")
+	}
+	if !strings.Contains(err.Error(), "auth.accessToken: must be configured") {
+		t.Fatalf("error = %q, want missing access token", err)
+	}
+}
+
+func TestLoad_AuthRejectsEmptyPublicKey(t *testing.T) {
+	t.Parallel()
+
+	path := writeTempConfig(t, configWithAuth(`
+auth:
+  accessToken:
+    publicKey: ""
+`))
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected empty public key configuration to fail")
+	}
+	if !strings.Contains(err.Error(), "auth.accessToken.publicKey: cannot be empty") {
+		t.Fatalf("error = %q, want publicKey validation error", err)
 	}
 }

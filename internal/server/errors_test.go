@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	psto "aidanwoods.dev/go-paseto"
 	"github.com/cloudwego/hertz/pkg/app"
 	hertz "github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/maadiii/gogate/config"
@@ -25,6 +27,34 @@ import (
 // client saw a bare status and no body at all.
 
 const testTokenSecret = "0123456789abcdef0123456789abcdef"
+
+func newPublicPasetoFixture(t *testing.T, issuer string) (config.Auth, *auth.PublicPaseto) {
+	t.Helper()
+
+	accessKey := psto.NewV4AsymmetricSecretKey()
+	refreshKey := psto.NewV4AsymmetricSecretKey()
+	paseto, err := auth.NewPublicPaseto(auth.PublicPasetoConfig{
+		Issuer:            issuer,
+		AccessPrivateKey:  accessKey.ExportBytes(),
+		AccessPublicKey:   accessKey.Public().ExportBytes(),
+		RefreshPrivateKey: refreshKey.ExportBytes(),
+		RefreshPublicKey:  refreshKey.Public().ExportBytes(),
+		AccessTTL:         time.Hour,
+		RefreshTTL:        2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("building public PASETO fixture: %v", err)
+	}
+
+	return config.Auth{
+		AccessToken: config.AccessToken{
+			PublicKey: base64.StdEncoding.EncodeToString(accessKey.Public().ExportBytes()),
+		},
+		RefreshToken: config.RefreshToken{
+			PublicKey: base64.StdEncoding.EncodeToString(refreshKey.Public().ExportBytes()),
+		},
+	}, paseto
+}
 
 // hertzAddrWithErrorHandler boots a real Hertz server in front of gw with the
 // middleware installed the way main.go installs it — before the route, so that
@@ -208,17 +238,8 @@ func TestAuthHook_ThroughErrorHandler(t *testing.T) {
 
 	backend := echoBackend(t)
 
-	authCfg := &config.Config{
-		AppName: "gateway",
-		Auth: config.Auth{
-			AccessToken: config.AccessToken{
-				PublicKey: testTokenSecret,
-			},
-			RefreshToken: config.RefreshToken{
-				PublicKey: testTokenSecret,
-			},
-		},
-	}
+	authConfig, issuer := newPublicPasetoFixture(t, "gateway")
+	authCfg := &config.Config{AppName: "gateway", Auth: authConfig}
 
 	registry := hook.NewRegistry()
 	if err := hooks.Register(registry, authCfg); err != nil {
@@ -232,17 +253,6 @@ func TestAuthHook_ThroughErrorHandler(t *testing.T) {
 		},
 	})
 	addr := hertzAddrWithErrorHandler(t, gw, false)
-
-	issuer, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
-		Issuer:     "gateway",
-		AccessKey:  []byte(testTokenSecret),
-		RefreshKey: []byte(testTokenSecret),
-		AccessTTL:  time.Hour,
-		RefreshTTL: 2 * time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("building the issuer: %v", err)
-	}
 
 	tokens, err := issuer.Generate("user-1", "gateway", nil)
 	if err != nil {
