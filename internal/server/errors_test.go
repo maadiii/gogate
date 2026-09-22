@@ -230,7 +230,7 @@ func TestAuthHook_ThroughErrorHandler(t *testing.T) {
 	gw := buildGateway(t, registry, routeSpec{
 		path: "/me", methods: []string{"GET"}, target: backend.URL,
 		hooks: config.RouteHooks{
-			PreRequest: config.HookRefList{{Name: "auth"}},
+			PreRequest: config.HookRefList{{Name: "paseto"}},
 		},
 	})
 	addr := hertzAddrWithErrorHandler(t, gw, false)

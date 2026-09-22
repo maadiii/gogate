@@ -13,11 +13,48 @@ import (
 	"github.com/maadiii/goutils/auth"
 )
 
-type Auth struct {
+type Paset struct {
 	paseto goutils.LocalPaseto
 }
 
-// authHookName is the single name this hook is known by, in code and in
+// Execute implements [hook.Hook].
+func (a *Paset) Execute(c context.Context, rc *app.RequestContext) error {
+	token, ok := bearerToken(rc.GetHeader("Authorization"))
+	if !ok {
+		return reject(rc)
+	}
+
+	claims, err := a.paseto.ValidateAccess(token)
+	if err != nil {
+		return reject(rc)
+	}
+
+	roles := stringSliceClaim(claims.CustomClaims, "roles")
+	perms := stringSliceClaim(claims.CustomClaims, "perms")
+
+	identity := hook.Identity{
+		Subject:     claims.Subject,
+		Roles:       roles,
+		Permissions: perms,
+		AuthMethod:  "paseto",
+	}
+	hook.SetIdentity(rc, identity)
+	forwardIdentity(rc, identity)
+
+	return nil
+}
+
+// Name implements [hook.Hook].
+func (a *Paset) Name() string {
+	return pasetoHookName
+}
+
+// Stage implements [hook.Hook].
+func (a *Paset) Stage() hook.Stage {
+	return hook.PreRequest
+}
+
+// pasetoHookName is the single name this hook is known by, in code and in
 // gateway.yaml.
 //
 // The name appears twice — once as the Registry key and once as Name() — and
@@ -25,10 +62,10 @@ type Auth struct {
 // disagrees with the key it was registered under, which is exactly what this
 // hook did until both sites started reading from this constant. Keeping one
 // literal means the two cannot drift apart again.
-const authHookName = "auth"
+const pasetoHookName = "paseto"
 
-func registerAuth(reg hook.Registry, cfg *config.Config) error {
-	return reg.Register(authHookName, func(config map[string]any) (hook.Hook, error) {
+func registerPaseto(reg hook.Registry, cfg *config.Config) error {
+	return reg.Register(pasetoHookName, func(config map[string]any) (hook.Hook, error) {
 		localPaseto, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
 			Issuer:     cfg.AppName,
 			AccessKey:  []byte(cfg.Auth.AccessToken.Secret),
@@ -40,7 +77,7 @@ func registerAuth(reg hook.Registry, cfg *config.Config) error {
 			return nil, err
 		}
 
-		return &Auth{localPaseto}, nil
+		return &Paset{localPaseto}, nil
 	})
 }
 
@@ -93,76 +130,49 @@ func reject(rc *app.RequestContext) error {
 	return nil
 }
 
-// identityOf returns the identity shared across hooks for this request,
-// creating it on first use.
-//
-// It must tolerate the state being absent. A hook is built once at startup and
-// shared across every request, so it cannot assume anything ran before it on
-// this particular request — and a missing value read with the single-value form
-// of a type assertion panics, which the pipeline recovers and reports as a
-// server fault. That would make every authenticated request a 500.
-//
-// TODO: this is provisional. Where shared hook state lives, what its key
-// namespace is, and whether a middleware has to seed it are still open
-// questions (roadmap Phase 2, item 1), and this hook should not be the thing
-// that decides them by default.
-func identityOf(rc *app.RequestContext) *State {
-	if existing, ok := rc.Get(stateKey); ok {
-		if state, ok := existing.(*State); ok {
-			return state
-		}
+// forwardIdentity is the explicit boundary between gateway-owned request
+// state and the headers trusted by the downstream service. Client-provided
+// values are removed first, then rebuilt exclusively from validated identity.
+func forwardIdentity(rc *app.RequestContext, identity hook.Identity) {
+	rc.Request.Header.Del("X-UserID")
+	rc.Request.Header.Del("X-Roles")
+	rc.Request.Header.Del("X-Perms")
+
+	rc.Request.Header.Set("X-UserID", identity.Subject)
+	for _, role := range identity.Roles {
+		rc.Request.Header.Add("X-Roles", role)
 	}
-
-	state := new(State)
-	rc.Set(stateKey, state)
-
-	return state
+	for _, permission := range identity.Permissions {
+		rc.Request.Header.Add("X-Perms", permission)
+	}
 }
 
-// Execute implements [hook.Hook].
-func (a *Auth) Execute(c context.Context, rc *app.RequestContext) error {
-	token, ok := bearerToken(rc.GetHeader("Authorization"))
+// stringSliceClaim accepts both the concrete slice used when claims are made
+// in Go and the []any form produced by generic PASETO decoding. A malformed
+// claim is deliberately treated as absent: it cannot become a trusted header.
+func stringSliceClaim(claims map[string]any, key string) []string {
+	value, ok := claims[key]
 	if !ok {
-		return reject(rc)
+		return nil
 	}
 
-	claims, err := a.paseto.ValidateAccess(token)
-	if err != nil {
-		return reject(rc)
+	if values, ok := value.([]string); ok {
+		return values
 	}
 
-	state := identityOf(rc)
+	values, ok := value.([]any)
+	if !ok {
+		return nil
+	}
 
-	state.userId = claims.Subject
-	rc.Request.Header.Set("X-UserID", claims.Subject)
-
-	roles, ok := claims.CustomClaims["roles"].([]string)
-	if ok {
-		state.roles = roles
-
-		for _, role := range roles {
-			rc.Request.Header.Add("X-Roles", role)
+	result := make([]string, len(values))
+	for i, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil
 		}
+		result[i] = text
 	}
 
-	perms, ok := claims.CustomClaims["perms"].([]string)
-	if ok {
-		state.permissions = perms
-
-		for _, perm := range perms {
-			rc.Request.Header.Add("X-Perms", perm)
-		}
-	}
-
-	return nil
-}
-
-// Name implements [hook.Hook].
-func (a *Auth) Name() string {
-	return authHookName
-}
-
-// Stage implements [hook.Hook].
-func (a *Auth) Stage() hook.Stage {
-	return hook.PreRequest
+	return result
 }

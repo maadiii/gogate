@@ -9,11 +9,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	hertz "github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/maadiii/gogate/config"
 	"github.com/maadiii/gogate/internal/hook"
+	apperrors "github.com/maadiii/gogate/pkg/errors"
+	concretehooks "github.com/maadiii/gogate/pkg/hooks"
+	"github.com/maadiii/goutils/auth"
 )
 
 // The tests in this file are the only ones that drive a real Hertz server
@@ -52,6 +57,27 @@ func hertzAddr(t *testing.T, gw *Gateway) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
+		_ = h.Shutdown(ctx)
+	})
+
+	return ln.Addr().String()
+}
+
+func hertzAddrWithErrors(t *testing.T, gw *Gateway) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("binding listener: %v", err)
+	}
+
+	h := hertz.New(hertz.WithListener(ln))
+	h.Use(apperrors.ErrorHandler(false))
+	h.Any("/*path", gw.Forward)
+	go func() { _ = h.Run() }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		_ = h.Shutdown(ctx)
 	})
 
@@ -361,5 +387,241 @@ func TestE2E_WildcardAndExactPrecedence_ThroughRealRouter(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected /api/users to be unmatched (404), got %d", resp.StatusCode)
+	}
+}
+
+// TestE2E_AuthHook_AuthenticatesForwardsAndRejects drives a real client-facing
+// gateway and a distinct real backend. It proves that auth runs before proxying,
+// replaces forged identity headers, preserves the backend response, and blocks
+// an invalid token before it can reach the backend.
+func TestE2E_AuthHook_AuthenticatesForwardsAndRejects(t *testing.T) {
+	const (
+		issuer        = "auth-e2e"
+		accessSecret  = "01234567890123456789012345678901"
+		refreshSecret = "abcdefghijklmnopqrstuvwxyz123456"
+	)
+
+	backendCalls := make(chan struct{}, 2)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls <- struct{}{}
+		if got := r.Header.Get("X-UserID"); got != "user-42" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "X-UserID = %q", got)
+			return
+		}
+		if got := r.Header.Values("X-Roles"); len(got) != 2 || got[0] != "member" || got[1] != "billing" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "X-Roles = %v", got)
+			return
+		}
+		if got := r.Header.Values("X-Perms"); len(got) != 1 || got[0] != "reports:read" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "X-Perms = %v", got)
+			return
+		}
+		w.Header().Set("X-Backend", "authenticated")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	cfg := &config.Config{
+		Port: 8000, AppName: issuer,
+		Auth: config.Auth{
+			AccessToken:  config.AccessToken{Secret: accessSecret, TTL: config.Duration(time.Hour)},
+			RefreshToken: config.RefreshToken{Secret: refreshSecret, TTL: config.Duration(time.Hour)},
+		},
+	}
+	registry := hook.NewRegistry()
+	if err := concretehooks.Register(registry, cfg); err != nil {
+		t.Fatalf("registering auth hook: %v", err)
+	}
+	gw := buildGateway(t, registry, routeSpec{
+		path: "/private", methods: []string{http.MethodGet}, target: backend.URL,
+		hooks: config.RouteHooks{PreRequest: config.HookRefList{{Name: "paseto"}}},
+	})
+	addr := hertzAddrWithErrors(t, gw)
+
+	paseto, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
+		Issuer: issuer, AccessKey: []byte(accessSecret), RefreshKey: []byte(refreshSecret),
+		AccessTTL: time.Hour, RefreshTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("creating token issuer: %v", err)
+	}
+	tokens, err := paseto.Generate("user-42", "", map[string]any{
+		"roles": []string{"member", "billing"}, "perms": []string{"reports:read"},
+	})
+	if err != nil {
+		t.Fatalf("generating access token: %v", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	request := func(authorization string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/private", nil)
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		req.Header.Set("Authorization", authorization)
+		req.Header.Set("X-UserID", "forged-user")
+		req.Header.Add("X-Roles", "admin")
+		req.Header.Add("X-Perms", "everything:write")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("calling gateway: %v", err)
+		}
+		return resp
+	}
+
+	valid := request("Bearer " + tokens.Access)
+	validBody, _ := io.ReadAll(valid.Body)
+	_ = valid.Body.Close()
+	if valid.StatusCode != http.StatusCreated || string(validBody) != `{"accepted":true}` || valid.Header.Get("X-Backend") != "authenticated" {
+		t.Fatalf("valid request: status=%d body=%q backend=%q", valid.StatusCode, validBody, valid.Header.Get("X-Backend"))
+	}
+
+	invalid := request("Bearer not-a-paseto-token")
+	invalidBody, _ := io.ReadAll(invalid.Body)
+	_ = invalid.Body.Close()
+	if invalid.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("invalid token: status=%d body=%q, want 401", invalid.StatusCode, invalidBody)
+	}
+	if !strings.Contains(string(invalidBody), `"key":"UNAUTHORIZED"`) {
+		t.Fatalf("invalid token: body=%q, want the shaped UNAUTHORIZED error", invalidBody)
+	}
+
+	missing := request("")
+	missingBody, _ := io.ReadAll(missing.Body)
+	_ = missing.Body.Close()
+	if missing.StatusCode != http.StatusUnauthorized || !strings.Contains(string(missingBody), `"key":"UNAUTHORIZED"`) {
+		t.Fatalf("missing token: status=%d body=%q, want shaped 401", missing.StatusCode, missingBody)
+	}
+
+	select {
+	case <-backendCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("valid request never reached backend")
+	}
+	select {
+	case <-backendCalls:
+		t.Fatal("invalid token reached backend")
+	default:
+	}
+}
+
+// TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated combines the two
+// production risks that must never be tested separately only: Hertz's pooled
+// inbound RequestContexts under real TCP concurrency, and one shared auth
+// hook/reverse-proxy/client forwarding distinct authenticated identities.
+func TestE2E_PASETOAuth_ConcurrentIdentitiesStayIsolated(t *testing.T) {
+	t.Parallel()
+
+	const (
+		issuer        = "paseto-concurrency-e2e"
+		accessSecret  = "01234567890123456789012345678901"
+		refreshSecret = "abcdefghijklmnopqrstuvwxyz123456"
+		iterations    = 600
+		maxInFlight   = 24
+	)
+
+	var backendCalls atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls.Add(1)
+
+		roles := r.Header.Values("X-Roles")
+		permissions := r.Header.Values("X-Perms")
+		if len(roles) != 1 || len(permissions) != 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "roles=%v permissions=%v", roles, permissions)
+
+			return
+		}
+
+		_, _ = fmt.Fprintf(w, "%s|%s|%s", r.Header.Get("X-UserID"), roles[0], permissions[0])
+	}))
+	t.Cleanup(backend.Close)
+
+	cfg := &config.Config{
+		Port: 8000, AppName: issuer,
+		Auth: config.Auth{
+			AccessToken:  config.AccessToken{Secret: accessSecret, TTL: config.Duration(time.Hour)},
+			RefreshToken: config.RefreshToken{Secret: refreshSecret, TTL: config.Duration(time.Hour)},
+		},
+	}
+	registry := hook.NewRegistry()
+	if err := concretehooks.Register(registry, cfg); err != nil {
+		t.Fatalf("registering paseto hook: %v", err)
+	}
+	gw := buildGateway(t, registry, routeSpec{
+		path: "/private", methods: []string{http.MethodGet}, target: backend.URL,
+		hooks: config.RouteHooks{PreRequest: config.HookRefList{{Name: "paseto"}}},
+	})
+	addr := hertzAddrWithErrors(t, gw)
+
+	issuerPaseto, err := auth.NewLocalPaseto(auth.LocalPasetoConfig{
+		Issuer: issuer, AccessKey: []byte(accessSecret), RefreshKey: []byte(refreshSecret),
+		AccessTTL: time.Hour, RefreshTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("creating token issuer: %v", err)
+	}
+
+	tokens := make([]string, iterations)
+	for i := range iterations {
+		userID := fmt.Sprintf("user-%d", i)
+		issued, err := issuerPaseto.Generate(userID, "", map[string]any{
+			"roles": []string{fmt.Sprintf("role-%d", i)},
+			"perms": []string{fmt.Sprintf("resource:%d:read", i)},
+		})
+		if err != nil {
+			t.Fatalf("issuing token %d: %v", i, err)
+		}
+		tokens[i] = issued.Access
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	runConcurrently(iterations, maxInFlight, func(i int) {
+		userID := fmt.Sprintf("user-%d", i)
+		want := fmt.Sprintf("%s|role-%d|resource:%d:read", userID, i, i)
+
+		req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/private", nil)
+		if err != nil {
+			t.Errorf("request %d: building request: %v", i, err)
+
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+tokens[i])
+		// A distinct forged value on every request makes a leaked or un-cleared
+		// header unmistakable at the backend.
+		req.Header.Set("X-UserID", "forged-"+userID)
+		req.Header.Set("X-Roles", "forged-role")
+		req.Header.Set("X-Perms", "forged:permission")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Errorf("request %d: calling gateway: %v", i, err)
+
+			return
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			t.Errorf("request %d: reading response: %v", i, readErr)
+
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("request %d: status=%d body=%q", i, resp.StatusCode, body)
+
+			return
+		}
+		if got := string(body); got != want {
+			t.Errorf("request %d: response=%q, want %q (identity cross-talk)", i, got, want)
+		}
+	})
+
+	if got := backendCalls.Load(); got != iterations {
+		t.Errorf("backend calls = %d, want %d", got, iterations)
 	}
 }

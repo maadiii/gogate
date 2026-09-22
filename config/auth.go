@@ -3,7 +3,7 @@ package config
 import "fmt"
 
 // Auth holds the token settings shared by every route that authenticates with
-// JWTs.
+// local PASETO tokens.
 //
 // The block as a whole is optional: a gateway whose routes are all public does
 // not need it, and an omitted block decodes to the zero value. But anything the
