@@ -1,4 +1,5 @@
 /vendor
+.freebuff
 
 coverage.out
 AGENTs.md

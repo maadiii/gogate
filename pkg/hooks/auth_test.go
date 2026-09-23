@@ -1,11 +1,14 @@
 package hooks
 
 import (
+	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
 	psto "aidanwoods.dev/go-paseto"
 	"github.com/cloudwego/hertz/pkg/common/ut"
+	"github.com/maadiii/gogate/config"
 	"github.com/maadiii/gogate/internal/hook"
 	"github.com/maadiii/goutils/auth"
 )
@@ -71,6 +74,9 @@ func TestPublicPasetoVerifier_RejectsWrongKeyAndExpiredToken(t *testing.T) {
 	if _, err := verifier.ValidateAccess(tokens.Access); err == nil {
 		t.Fatal("expected expired token to be rejected")
 	}
+	if _, err := verifier.ValidateAccess(tokens.Refresh); err == nil {
+		t.Fatal("expected refresh token to be rejected by access validation")
+	}
 
 	otherIssuer, otherPublicKey := newPublicPasetoTestIssuer(t, time.Hour)
 	otherTokens, err := otherIssuer.Generate("user-1", "gateway", nil)
@@ -86,6 +92,80 @@ func TestPublicPasetoVerifier_RejectsWrongKeyAndExpiredToken(t *testing.T) {
 	}
 	if _, err := otherVerifier.ValidateAccess(tokens.Access); err == nil {
 		t.Fatal("expected token signed by the old key to be rejected")
+	}
+}
+
+func TestRegister_ValidatesAccessPublicKey(t *testing.T) {
+	t.Parallel()
+
+	validKey := psto.NewV4AsymmetricSecretKey().Public().ExportBytes()
+	tests := []struct {
+		name      string
+		publicKey string
+		wantErr   bool
+	}{
+		{name: "malformed base64", publicKey: "not-base64", wantErr: true},
+		{name: "wrong decoded length", publicKey: base64.StdEncoding.EncodeToString([]byte("short")), wantErr: true},
+		{name: "valid access-only key", publicKey: base64.StdEncoding.EncodeToString(validKey)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry := hook.NewRegistry()
+			cfg := &config.Config{Auth: config.Auth{
+				AccessToken: config.AccessToken{PublicKey: tt.publicKey},
+			}}
+			if err := Register(registry, cfg); err != nil {
+				t.Fatalf("registering hook: %v", err)
+			}
+
+			_, err := registry.Build(pasetoHookName, nil)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Build() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPaseto_Execute_DoesNotForwardMalformedClaims(t *testing.T) {
+	t.Parallel()
+
+	issuer, publicKey := newPublicPasetoTestIssuer(t, time.Hour)
+	tokens, err := issuer.Generate("user-1", "gateway", map[string]any{
+		"roles": []any{"member", 7}, "perms": "reports:read",
+	})
+	if err != nil {
+		t.Fatalf("generating token: %v", err)
+	}
+	verifier, err := newPublicPasetoVerifier(publicKey)
+	if err != nil {
+		t.Fatalf("creating verifier: %v", err)
+	}
+
+	rc := ut.CreateUtRequestContext("GET", "/private", &ut.Body{})
+	rc.Request.Header.Set(authorizationHeader, "Bearer "+tokens.Access)
+	paseto := &Paseto{paseto: verifier}
+	if err := paseto.Execute(context.Background(), rc); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	identity, ok := hook.IdentityFrom(rc)
+	if !ok {
+		t.Fatal("expected identity to be stored")
+	}
+	if identity.Subject != "user-1" || len(identity.Roles) != 0 || len(identity.Permissions) != 0 {
+		t.Fatalf("identity = %+v, want subject without malformed roles or permissions", identity)
+	}
+	if got := rc.Request.Header.Get("X-UserID"); got != "user-1" {
+		t.Fatalf("X-UserID = %q, want user-1", got)
+	}
+	if got := rc.Request.Header.GetAll("X-Roles"); len(got) != 0 {
+		t.Fatalf("X-Roles = %v, want no forwarded roles", got)
+	}
+	if got := rc.Request.Header.GetAll("X-Perms"); len(got) != 0 {
+		t.Fatalf("X-Perms = %v, want no forwarded permissions", got)
 	}
 }
 

@@ -78,20 +78,22 @@ auth:
 	}
 }
 
-func TestLoad_AuthRejectsEmptyPublicKey(t *testing.T) {
+func TestLoad_AuthRejectsEmptyAccessPublicKeyWhenRefreshIsConfigured(t *testing.T) {
 	t.Parallel()
 
 	path := writeTempConfig(t, configWithAuth(`
 auth:
   accessToken:
     publicKey: ""
+  refreshToken:
+    publicKey: "`+testPublicKey+`"
 `))
 
 	_, err := config.Load(path)
 	if err == nil {
-		t.Fatal("expected empty public key configuration to fail")
+		t.Fatal("expected empty access public key configuration to fail")
 	}
-	if !strings.Contains(err.Error(), "auth.accessToken.publicKey: cannot be empty") {
-		t.Fatalf("error = %q, want publicKey validation error", err)
+	if !strings.Contains(err.Error(), "auth.accessToken: must be configured") {
+		t.Fatalf("error = %q, want missing access token", err)
 	}
 }
