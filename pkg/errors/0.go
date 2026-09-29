@@ -72,7 +72,7 @@ func As(err error, target any) bool {
 
 func HasCode(err error, code Code) bool {
 	target := new(Error)
-	if !errors.As(err, target) {
+	if !errors.As(err, &target) {
 		return false
 	}
 
