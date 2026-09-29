@@ -70,6 +70,15 @@ func As(err error, target any) bool {
 	return errors.As(err, target)
 }
 
+func HasCode(err error, code Code) bool {
+	target := new(Error)
+	if !errors.As(err, target) {
+		return false
+	}
+
+	return target.code == code
+}
+
 // Is reports whether err is the same kind of coded error as target: same code,
 // same key. Anything that is not one of this package's errors falls through to
 // [errors.Is], so ordinary sentinel comparisons keep working.
